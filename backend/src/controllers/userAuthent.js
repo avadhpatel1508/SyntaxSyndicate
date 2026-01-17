@@ -1,176 +1,238 @@
 const redisClient = require("../config/redis");
-const User =  require("../models/user")
-const validate = require('../utils/validator');
+const User = require("../models/user");
 const bcrypt = require("bcrypt");
-const jwt = require('jsonwebtoken');
+const jwt = require("jsonwebtoken");
 const admin = require("firebase-admin");
+
+/**
+ * REGISTER (Firebase based)
+ */
+
 
 const register = async (req, res) => {
   try {
-    // frontend sends firebaseIdToken
-    const { firebaseIdToken, firstName, district } = req.body;
+    const {
+      firstName,
+      lastName,
+      emailId,
+      password,
+      mobileNo,
+      address, // expected as object
+    } = req.body;
 
-    if (!firebaseIdToken) {
-      return res.status(400).json({ message: "Firebase token required" });
+    /*
+      address = {
+        line1,
+        city,
+        state,
+        pincode
+      }
+    */
+
+    // 1️⃣ Basic validation
+    if (!firstName || !emailId || !password) {
+      return res.status(400).json({
+        message: "Required fields missing",
+      });
     }
 
-    // 1️⃣ Verify Firebase token
-    const decodedToken = await admin.auth().verifyIdToken(firebaseIdToken);
-
-    // Ensure email is verified
-    if (!decodedToken.email_verified) {
-      return res.status(401).json({ message: "Email not verified" });
+    // Optional but recommended pincode validation
+    if (address?.pincode && address.pincode.length !== 6) {
+      return res.status(400).json({
+        message: "Pincode must be exactly 6 digits",
+      });
     }
-
-    const emailId = decodedToken.email;
 
     // 2️⃣ Check if user already exists
-    let user = await User.findOne({ emailId });
-    if (user) {
-      return res.status(400).json({ message: "User already exists" });
+    const existingUser = await User.findOne({ emailId });
+    if (existingUser) {
+      return res.status(409).json({
+        message: "User already exists",
+      });
     }
 
-    // 3️⃣ Create user in MongoDB
-    user = await User.create({
+    // 3️⃣ Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // 4️⃣ Create user according to schema
+    const user = await User.create({
       firstName,
+      lastName,
       emailId,
-      district,
-      role: "user",
+      mobileNo,
+      password: hashedPassword,
+      role: "citizen",
+
+      address: {
+        line1: address?.line1 || "",
+        city: address?.city || "",
+        state: address?.state || "",
+        pincode: address?.pincode || "",
+      },
+
+      verification: {
+        emailVerified: true, // later: email OTP
+        phoneVerified: false,
+      },
+
+      servicesUsed: [],
+      isActive: true,
     });
 
-    // 4️⃣ Create your JWT
+    // 5️⃣ Issue JWT
     const token = jwt.sign(
-      { _id: user._id, emailId, role: user.role },
+      { _id: user._id, role: user.role },
       process.env.JWT_KEY,
       { expiresIn: "1h" }
     );
 
-    // 5️⃣ Send cookie + response
     res.cookie("token", token, {
       httpOnly: true,
-      maxAge: 60 * 60 * 1000,
       sameSite: "lax",
+      maxAge: 60 * 60 * 1000,
+      // secure: true, // enable in production
     });
 
+    // 6️⃣ Response (safe fields only)
     res.status(201).json({
       message: "Registration successful",
       user: {
         _id: user._id,
         firstName: user.firstName,
+        lastName: user.lastName,
         emailId: user.emailId,
+        mobileNo: user.mobileNo,
         role: user.role,
+        address: user.address,
+        verification: user.verification,
       },
     });
-
   } catch (err) {
-    console.error(err);
-    res.status(401).json({ message: "Invalid Firebase token" });
+    console.error("REGISTER ERROR:", err);
+    res.status(500).json({
+      message: "Internal server error",
+    });
   }
 };
 
 
-const login = async (req,res)=>{
+/**
+ * LOGIN (Firebase token based – RECOMMENDED)
+ */
+const login = async (req, res) => {
+  try {
+    const { firebaseIdToken } = req.body;
 
-    try{
-        const {emailId, password} = req.body;
-
-        if(!emailId)
-            throw new Error("Invalid Credentials");
-        if(!password)
-            throw new Error("Invalid Credentials");
-
-        const user = await User.findOne({emailId});
-
-        const match = await bcrypt.compare(password,user.password);
-
-        if(!match)
-            throw new Error("Invalid Credentials");
-
-        const reply = {
-            firstName: user.firstName,
-            emailId: user.emailId,
-            _id: user._id,
-            role:user.role,
-        }
-
-        const token =  jwt.sign({_id:user._id , emailId:emailId, role:user.role},process.env.JWT_KEY,{expiresIn: 60*60});
-        res.cookie('token',token,{maxAge: 60*60*1000});
-        res.status(201).json({
-            user:reply,
-            message:"Loggin Successfully"
-        })
+    if (!firebaseIdToken) {
+      return res.status(400).json({ message: "Firebase token required" });
     }
-    catch(err){
-        res.status(401).send("Error: "+err);
+
+    // ✅ Verify Firebase token
+    const decodedToken = await admin.auth().verifyIdToken(firebaseIdToken);
+
+    const emailId = decodedToken.email?.toLowerCase();
+
+    if (!emailId) {
+      return res.status(400).json({ message: "Email not found in token" });
     }
-}
 
+    // ✅ Find user in DB
+    const user = await User.findOne({ emailId });
 
-// logOut feature
-
-const logout = async(req,res)=>{
-
-    try{
-        const {token} = req.cookies;
-        const payload = jwt.decode(token);
-
-
-        await redisClient.set(`token:${token}`,'Blocked');
-        await redisClient.expireAt(`token:${token}`,payload.exp);
-    //    Token add kar dung Redis ke blockList
-    //    Cookies ko clear kar dena.....
-
-    res.cookie("token",null,{expires: new Date(Date.now())});
-    res.send("Logged Out Succesfully");
-
+    if (!user) {
+      return res.status(401).json({ message: "User not registered" });
     }
-    catch(err){
-       res.status(503).send("Error: "+err);
+
+    // ✅ Account status check
+    if (!user.isActive) {
+      return res.status(403).json({ message: "Account is deactivated" });
     }
-}
 
-
-const adminRegister = async(req,res)=>{
-    try{
-        // validate the data;
-    //   if(req.result.role!='admin')
-    //     throw new Error("Invalid Credentials");  
-      validate(req.body); 
-      const {firstName, emailId, password}  = req.body;
-
-      req.body.password = await bcrypt.hash(password, 10);
-    //
-    
-     const user =  await User.create(req.body);
-     const token =  jwt.sign({_id:user._id , emailId:emailId, role:user.role},process.env.JWT_KEY,{expiresIn: 60*60});
-     res.cookie('token',token,{maxAge: 60*60*1000});
-     res.status(201).send("User Registered Successfully");
+    // (Optional but recommended)
+    if (!user.verification.emailVerified) {
+      return res.status(403).json({ message: "Email not verified" });
     }
-    catch(err){
-        res.status(400).send("Error: "+err);
-    }
-}
 
-const deleteProfile = async(req,res)=>{
-  
-    try{
-       const userId = req.result._id;
-      
-    // userSchema delete
+    // ✅ Create JWT
+    const token = jwt.sign(
+      {
+        _id: user._id,
+        role: user.role,
+      },
+      process.env.JWT_KEY,
+      { expiresIn: "1h" }
+    );
+
+    // ✅ Set cookie
+    res.cookie("token", token, {
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 60 * 60 * 1000,
+      // secure: true, // enable in production (HTTPS)
+    });
+
+    // ✅ Response aligned with schema
+    res.status(200).json({
+      message: "Login successful",
+      user: {
+        _id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        emailId: user.emailId,
+        mobileNo: user.mobileNo,
+        role: user.role,
+        servicesUsed: user.servicesUsed,
+        address: user.address,
+        verification: user.verification,
+      },
+    });
+  } catch (err) {
+    console.error("LOGIN ERROR:", err);
+    res.status(401).json({ message: "Invalid Firebase token" });
+  }
+};
+
+/**
+ * LOGOUT
+ */
+const logout = async (req, res) => {
+  try {
+    const token = req.cookies.token;
+    if (!token) return res.status(200).json({ message: "Already logged out" });
+
+    const payload = jwt.verify(token, process.env.JWT_KEY);
+
+    // blacklist token till expiry
+    const ttl = payload.exp - Math.floor(Date.now() / 1000);
+    await redisClient.setEx(`bl:${token}`, ttl, "blocked");
+
+    res.clearCookie("token");
+    res.json({ message: "Logged out successfully" });
+  } catch (err) {
+    console.error("LOGOUT ERROR:", err);
+    res.status(500).json({ message: "Logout failed" });
+  }
+};
+
+/**
+ * DELETE PROFILE
+ */
+const deleteProfile = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
     await User.findByIdAndDelete(userId);
 
-    // Submission se bhi delete karo...
-    
-    // await Submission.deleteMany({userId});
-    
-    res.status(200).send("Deleted Successfully");
+    res.status(200).json({ message: "Profile deleted successfully" });
+  } catch (err) {
+    console.error("DELETE ERROR:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
 
-    }
-    catch(err){
-      
-        res.status(500).send("Internal Server Error");
-    }
-}
-
-
-module.exports = {register, login,logout,adminRegister,deleteProfile};
+module.exports = {
+  register,
+  login,
+  logout,
+  deleteProfile,
+};

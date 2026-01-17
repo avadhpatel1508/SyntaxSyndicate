@@ -4,6 +4,8 @@ require('dotenv').config();
 const main =  require('./config/db')
 const cookieParser =  require('cookie-parser');
 const authRouter = require("./routes/userAuth");
+const healthcareRouter = require("./routes/healthcareRouter");
+const educationRouter= require("./routes/educationRouter");
 const redisClient = require('./config/redis');
 const cors = require('cors')
 require("./config/firebase");
@@ -20,6 +22,10 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.use('/user',authRouter);
+app.use("/healthcare", healthcareRouter);
+app.use("/education", educationRouter);
+
+
 
 
 const InitalizeConnection = async ()=>{

@@ -1,46 +1,45 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/user");
-const redisClient = require("../config/redis")
+const redisClient = require("../config/redis");
 
-const userMiddleware = async (req,res,next)=>{
+const userMiddleware = async (req, res, next) => {
+  try {
+    const { token } = req.cookies;
 
-    try{
-        
-        const {token} = req.cookies;
-        if(!token)
-            throw new Error("Token is not persent");
-
-        const payload = jwt.verify(token,process.env.JWT_KEY);
-
-        const {_id} = payload;
-
-        if(!_id){
-            throw new Error("Invalid token");
-        }
-
-        const result = await User.findById(_id);
-
-        if(!result){
-            throw new Error("User Doesn't Exist");
-        }
-
-        // Redis ke blockList mein persent toh nahi hai
-
-        const IsBlocked = await redisClient.exists(`token:${token}`);
-
-        if(IsBlocked)
-            throw new Error("Invalid Token");
-
-        req.result = result;
-
-
-        next();
-    }
-    catch(err){
-        res.status(401).send("Error: "+ err.message)
+    if (!token) {
+      return res.status(401).json({ message: "Token is not present" });
     }
 
-}
+    // ✅ Verify JWT
+    const payload = jwt.verify(token, process.env.JWT_KEY);
 
+    const { _id } = payload;
+
+    if (!_id) {
+      return res.status(401).json({ message: "Invalid token payload" });
+    }
+
+    // ✅ Fetch user
+    const user = await User.findById(_id);
+
+    if (!user) {
+      return res.status(401).json({ message: "User does not exist" });
+    }
+
+    // ✅ Check Redis blocklist (logout / revoked token)
+    const isBlocked = await redisClient.exists(`token:${token}`);
+
+    if (isBlocked) {
+      return res.status(401).json({ message: "Token revoked" });
+    }
+
+    // 🔥 FIX: Attach user properly
+    req.user = user;
+
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: err.message });
+  }
+};
 
 module.exports = userMiddleware;
