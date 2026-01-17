@@ -6,6 +6,8 @@ const cookieParser =  require('cookie-parser');
 const authRouter = require("./routes/userAuth");
 const redisClient = require('./config/redis');
 const cors = require('cors')
+require("./config/firebase");
+
 
 // console.log("Hello")
 

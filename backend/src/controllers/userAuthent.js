@@ -3,39 +3,70 @@ const User =  require("../models/user")
 const validate = require('../utils/validator');
 const bcrypt = require("bcrypt");
 const jwt = require('jsonwebtoken');
+const admin = require("firebase-admin");
 
+const register = async (req, res) => {
+  try {
+    // frontend sends firebaseIdToken
+    const { firebaseIdToken, firstName, district } = req.body;
 
-const register = async (req,res)=>{
-    
-    try{
-        // validate the data;
+    if (!firebaseIdToken) {
+      return res.status(400).json({ message: "Firebase token required" });
+    }
 
-      validate(req.body); 
-      const {firstName, emailId, password}  = req.body;
+    // 1️⃣ Verify Firebase token
+    const decodedToken = await admin.auth().verifyIdToken(firebaseIdToken);
 
-      req.body.password = await bcrypt.hash(password, 10);
-      req.body.role = 'user'
-    //
-    
-     const user =  await User.create(req.body);
-     const token =  jwt.sign({_id:user._id , emailId:emailId, role:'user'},process.env.JWT_KEY,{expiresIn: 60*60});
-     const reply = {
+    // Ensure email is verified
+    if (!decodedToken.email_verified) {
+      return res.status(401).json({ message: "Email not verified" });
+    }
+
+    const emailId = decodedToken.email;
+
+    // 2️⃣ Check if user already exists
+    let user = await User.findOne({ emailId });
+    if (user) {
+      return res.status(400).json({ message: "User already exists" });
+    }
+
+    // 3️⃣ Create user in MongoDB
+    user = await User.create({
+      firstName,
+      emailId,
+      district,
+      role: "user",
+    });
+
+    // 4️⃣ Create your JWT
+    const token = jwt.sign(
+      { _id: user._id, emailId, role: user.role },
+      process.env.JWT_KEY,
+      { expiresIn: "1h" }
+    );
+
+    // 5️⃣ Send cookie + response
+    res.cookie("token", token, {
+      httpOnly: true,
+      maxAge: 60 * 60 * 1000,
+      sameSite: "lax",
+    });
+
+    res.status(201).json({
+      message: "Registration successful",
+      user: {
+        _id: user._id,
         firstName: user.firstName,
         emailId: user.emailId,
-        _id: user._id,
-        role:user.role,
-    }
-    
-     res.cookie('token',token,{maxAge: 60*60*1000});
-     res.status(201).json({
-        user:reply,
-        message:"Loggin Successfully"
-    })
-    }
-    catch(err){
-        res.status(400).send("Error: "+err);
-    }
-}
+        role: user.role,
+      },
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(401).json({ message: "Invalid Firebase token" });
+  }
+};
 
 
 const login = async (req,res)=>{
