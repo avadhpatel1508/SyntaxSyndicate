@@ -109,3 +109,25 @@ Public services today often function in isolated systems, making it difficult to
 ```bash
 git clone https://github.com/your-username/smart-setu.git
 cd smart-setu
+###2️⃣ Install Backend Dependencies
+cd backend
+npm install
+
+###3️⃣ Install Frontend Dependencies
+cd ../frontend
+npm install
+
+###4️⃣ Configure Environment Variables
+
+Create a .env file inside the backend directory.
+
+###5️⃣ Run Backend Server
+cd backend
+npm run dev
+
+###6️⃣ Run Frontend
+cd frontend
+npm start
+
+###7️⃣ Open Application
+http://localhost:3000
